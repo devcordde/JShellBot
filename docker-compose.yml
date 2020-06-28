@@ -1,0 +1,9 @@
+version: "3.6"
+
+services:
+  bot:
+    container_name: jshell-bot
+    image: devcordde/jshell-bot
+    volumes:
+      - ./bot.properties:/usr/app/bot.properties
+    command: java -Xmx1024m -jar JShellBot.jar
