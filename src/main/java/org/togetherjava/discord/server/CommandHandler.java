@@ -8,14 +8,14 @@ import java.util.regex.Pattern;
 import jdk.jshell.Diag;
 import jdk.jshell.Snippet;
 import jdk.jshell.SnippetEvent;
-import net.dv8tion.jda.core.EmbedBuilder;
-import net.dv8tion.jda.core.MessageBuilder;
-import net.dv8tion.jda.core.entities.Message;
-import net.dv8tion.jda.core.entities.MessageChannel;
-import net.dv8tion.jda.core.entities.User;
-import net.dv8tion.jda.core.events.message.MessageReceivedEvent;
-import net.dv8tion.jda.core.hooks.ListenerAdapter;
-import net.dv8tion.jda.core.requests.RestAction;
+import net.dv8tion.jda.api.EmbedBuilder;
+import net.dv8tion.jda.api.MessageBuilder;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.MessageChannel;
+import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.requests.RestAction;
 import org.togetherjava.discord.server.execution.AllottedTimeExceededException;
 import org.togetherjava.discord.server.execution.JShellSessionManager;
 import org.togetherjava.discord.server.execution.JShellWrapper;
@@ -62,7 +62,7 @@ public class CommandHandler extends ListenerAdapter {
       } catch (UnsupportedOperationException | AllottedTimeExceededException e) {
         EmbedBuilder embedBuilder = buildCommonEmbed(event.getAuthor(), null);
         rendererManager.renderObject(embedBuilder, e);
-        send(new MessageBuilder().setEmbed(embedBuilder.build()).sendTo(event.getChannel()));
+        send(event.getChannel().sendMessage(new MessageBuilder().setEmbed(embedBuilder.build()).build()));
       }
     }
   }
@@ -80,7 +80,7 @@ public class CommandHandler extends ListenerAdapter {
   }
 
   private void executeCommand(User user, JShellWrapper shell, String command,
-      MessageChannel channel) {
+                              MessageChannel channel) {
     List<JShellResult> evalResults = shell.eval(command);
 
     List<JShellResult> toDisplay = evalResults.subList(
@@ -117,7 +117,7 @@ public class CommandHandler extends ListenerAdapter {
     }
 
     messageBuilder.setEmbed(embedBuilder.build());
-    send(messageBuilder.sendTo(channel));
+    send(channel.sendMessage(messageBuilder.build()));
   }
 
   private EmbedBuilder buildCommonEmbed(User user, Snippet snippet) {
