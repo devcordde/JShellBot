@@ -10,17 +10,18 @@ import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 
 public class Config {
 
-  private Properties properties;
+  private final Properties properties;
 
   /**
    * Reads the default config and populates this object with it
    *
-   * @param configPath the path to the config to read. Null or a non-existent path to only use
-   *     the defaults
+   * @param configPath the path to the config to read. Null or a non-existent path to only use the
+   * defaults
    * @throws IOException if an error occurs reading the config
    */
   public Config(Path configPath) throws IOException {
@@ -76,7 +77,8 @@ public class Config {
    */
   public Duration getDuration(String key) {
     try {
-      return Duration.parse(getString(key));
+      var raw = getString(key);
+      return Optional.ofNullable(raw).map(Duration::parse).orElse(null);
     } catch (DateTimeParseException e) {
       return null;
     }

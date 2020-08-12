@@ -1,8 +1,10 @@
 package org.togetherjava.discord.server;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import jdk.jshell.Diag;
@@ -13,9 +15,12 @@ import net.dv8tion.jda.api.MessageBuilder;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageChannel;
 import net.dv8tion.jda.api.entities.User;
-import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.message.MessageDeleteEvent;
+import net.dv8tion.jda.api.events.message.guild.GuildMessageReceivedEvent;
+import net.dv8tion.jda.api.events.message.guild.GuildMessageUpdateEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.RestAction;
+import org.jetbrains.annotations.NotNull;
 import org.togetherjava.discord.server.execution.AllottedTimeExceededException;
 import org.togetherjava.discord.server.execution.JShellSessionManager;
 import org.togetherjava.discord.server.execution.JShellWrapper;
@@ -28,13 +33,14 @@ public class CommandHandler extends ListenerAdapter {
   private static final Pattern CODE_BLOCK_EXTRACTOR_PATTERN = Pattern
       .compile("```(java)?\\s*([\\w\\W]+)```");
 
-  private JShellSessionManager jShellSessionManager;
+  private final JShellSessionManager jShellSessionManager;
   private final String botPrefix;
-  private RendererManager rendererManager;
-  private boolean autoDeleteMessages;
-  private Duration autoDeleteMessageDuration;
-  private InputSanitizerManager inputSanitizerManager;
+  private final RendererManager rendererManager;
+  private final boolean autoDeleteMessages;
+  private final Duration autoDeleteMessageDuration;
+  private final InputSanitizerManager inputSanitizerManager;
   private final int maxContextDisplayAmount;
+  private final Map<Long, Message> answeredMessages = new HashMap<>();
 
   @SuppressWarnings("WeakerAccess")
   public CommandHandler(Config config) {
@@ -48,21 +54,40 @@ public class CommandHandler extends ListenerAdapter {
   }
 
   @Override
-  public void onMessageReceived(MessageReceivedEvent event) {
-    String message = event.getMessage().getContentRaw();
+  public void onMessageDelete(@NotNull MessageDeleteEvent event) {
+    deleteOldMessage(event.getMessageIdLong());
+  }
+
+  @Override
+  public void onGuildMessageUpdate(@NotNull GuildMessageUpdateEvent event) {
+    deleteOldMessage(event.getMessageIdLong());
+    handleMessage(event.getMessage());
+  }
+
+  @Override
+  public void onGuildMessageReceived(@NotNull GuildMessageReceivedEvent event) {
+    handleMessage(event.getMessage());
+  }
+
+  private void deleteOldMessage(Long requestMessageId) {
+    Optional.ofNullable(answeredMessages.get(requestMessageId)).ifPresent(message -> message.delete().queue());
+  }
+
+  private void handleMessage(Message receivedMessage) {
+    String message = receivedMessage.getContentRaw();
 
     if (message.startsWith(botPrefix)) {
       String command = parseCommandFromMessage(message);
-      String authorID = event.getAuthor().getId();
+      String authorID = receivedMessage.getAuthor().getId();
 
       JShellWrapper shell = jShellSessionManager.getSessionOrCreate(authorID);
 
       try {
-        executeCommand(event.getAuthor(), shell, command, event.getTextChannel());
+        executeCommand(receivedMessage.getIdLong(), receivedMessage.getAuthor(), shell, command, receivedMessage.getTextChannel());
       } catch (UnsupportedOperationException | AllottedTimeExceededException e) {
-        EmbedBuilder embedBuilder = buildCommonEmbed(event.getAuthor(), null);
+        EmbedBuilder embedBuilder = buildCommonEmbed(receivedMessage.getAuthor(), null);
         rendererManager.renderObject(embedBuilder, e);
-        send(event.getChannel().sendMessage(new MessageBuilder().setEmbed(embedBuilder.build()).build()));
+        send(receivedMessage.getIdLong(), receivedMessage.getChannel().sendMessage(new MessageBuilder().setEmbed(embedBuilder.build()).build()));
       }
     }
   }
@@ -79,7 +104,7 @@ public class CommandHandler extends ListenerAdapter {
     return inputSanitizerManager.sanitize(withoutPrefix);
   }
 
-  private void executeCommand(User user, JShellWrapper shell, String command,
+  private void executeCommand(Long requestMessageId, User user, JShellWrapper shell, String command,
                               MessageChannel channel) {
     List<JShellResult> evalResults = shell.eval(command);
 
@@ -89,11 +114,11 @@ public class CommandHandler extends ListenerAdapter {
     );
 
     for (JShellResult result : toDisplay) {
-      handleResult(user, result, shell, channel);
+      handleResult(requestMessageId, user, result, shell, channel);
     }
   }
 
-  private void handleResult(User user, JShellWrapper.JShellResult result, JShellWrapper shell,
+  private void handleResult(Long requestMessageId, User user, JShellWrapper.JShellResult result, JShellWrapper shell,
       MessageChannel channel) {
     MessageBuilder messageBuilder = new MessageBuilder();
     EmbedBuilder embedBuilder;
@@ -117,7 +142,7 @@ public class CommandHandler extends ListenerAdapter {
     }
 
     messageBuilder.setEmbed(embedBuilder.build());
-    send(channel.sendMessage(messageBuilder.build()));
+    send(requestMessageId, channel.sendMessage(messageBuilder.build()));
   }
 
   private EmbedBuilder buildCommonEmbed(User user, Snippet snippet) {
@@ -131,10 +156,11 @@ public class CommandHandler extends ListenerAdapter {
     return embedBuilder;
   }
 
-  private void send(RestAction<Message> action) {
+  private void send(Long requestMessageId, RestAction<Message> action) {
     action.submit().thenAccept(message -> {
+      answeredMessages.put(requestMessageId, message);
       if (autoDeleteMessages) {
-        message.delete().queueAfter(autoDeleteMessageDuration.toMillis(), TimeUnit.MILLISECONDS);
+        message.delete().delay(autoDeleteMessageDuration).queue();
       }
     });
   }
