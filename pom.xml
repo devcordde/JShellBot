@@ -81,7 +81,7 @@
     <dependency>
       <groupId>net.dv8tion</groupId>
       <artifactId>JDA</artifactId>
-      <version>4.2.0_187</version>
+      <version>4.2.0_189</version>
     </dependency>
 
     <!--OTHER-->
@@ -135,5 +135,6 @@
       <version>${junit-jupiter.version}</version>
       <scope>test</scope>
     </dependency>
+
   </dependencies>
 </project>
