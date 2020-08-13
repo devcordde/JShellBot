@@ -1,10 +1,14 @@
 package org.togetherjava.discord.server;
 
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import jdk.jshell.Diag;
@@ -20,6 +24,7 @@ import net.dv8tion.jda.api.events.message.guild.GuildMessageReceivedEvent;
 import net.dv8tion.jda.api.events.message.guild.GuildMessageUpdateEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.RestAction;
+import net.dv8tion.jda.api.utils.TimeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.togetherjava.discord.server.execution.AllottedTimeExceededException;
 import org.togetherjava.discord.server.execution.JShellSessionManager;
@@ -38,14 +43,17 @@ public class CommandHandler extends ListenerAdapter {
   private final RendererManager rendererManager;
   private final boolean autoDeleteMessages;
   private final Duration autoDeleteMessageDuration;
+  private final Duration editLimit;
   private final InputSanitizerManager inputSanitizerManager;
   private final int maxContextDisplayAmount;
   private final Map<Long, Message> answeredMessages = new HashMap<>();
+  private final ScheduledExecutorService housekeeper = Executors.newSingleThreadScheduledExecutor();
 
   @SuppressWarnings("WeakerAccess")
   public CommandHandler(Config config) {
     this.jShellSessionManager = new JShellSessionManager(config);
     this.botPrefix = config.getString("prefix");
+    this.editLimit = config.getDuration("messages.edit_limit");
     this.rendererManager = new RendererManager();
     this.autoDeleteMessages = config.getBoolean("messages.auto_delete");
     this.autoDeleteMessageDuration = config.getDuration("messages.auto_delete.duration");
@@ -55,13 +63,19 @@ public class CommandHandler extends ListenerAdapter {
 
   @Override
   public void onMessageDelete(@NotNull MessageDeleteEvent event) {
-    deleteOldMessage(event.getMessageIdLong());
+    var created = TimeUtil.getTimeCreated(event.getMessageIdLong());
+    if (Duration.between(created, OffsetDateTime.now()).compareTo(editLimit) <= 0) {
+      deleteOldMessage(event.getMessageIdLong());
+    }
   }
 
   @Override
   public void onGuildMessageUpdate(@NotNull GuildMessageUpdateEvent event) {
-    deleteOldMessage(event.getMessageIdLong());
-    handleMessage(event.getMessage());
+    if (Duration.between(event.getMessage().getTimeCreated(), OffsetDateTime.now())
+        .compareTo(editLimit) <= 0) {
+      deleteOldMessage(event.getMessageIdLong());
+      handleMessage(event.getMessage());
+    }
   }
 
   @Override
@@ -70,7 +84,8 @@ public class CommandHandler extends ListenerAdapter {
   }
 
   private void deleteOldMessage(Long requestMessageId) {
-    Optional.ofNullable(answeredMessages.get(requestMessageId)).ifPresent(message -> message.delete().queue());
+    Optional.ofNullable(answeredMessages.get(requestMessageId))
+        .ifPresent(message -> message.delete().queue());
   }
 
   private void handleMessage(Message receivedMessage) {
@@ -83,11 +98,13 @@ public class CommandHandler extends ListenerAdapter {
       JShellWrapper shell = jShellSessionManager.getSessionOrCreate(authorID);
 
       try {
-        executeCommand(receivedMessage.getIdLong(), receivedMessage.getAuthor(), shell, command, receivedMessage.getTextChannel());
+        executeCommand(receivedMessage.getIdLong(), receivedMessage.getAuthor(), shell, command,
+            receivedMessage.getTextChannel());
       } catch (UnsupportedOperationException | AllottedTimeExceededException e) {
         EmbedBuilder embedBuilder = buildCommonEmbed(receivedMessage.getAuthor(), null);
         rendererManager.renderObject(embedBuilder, e);
-        send(receivedMessage.getIdLong(), receivedMessage.getChannel().sendMessage(new MessageBuilder().setEmbed(embedBuilder.build()).build()));
+        send(receivedMessage.getIdLong(), receivedMessage.getChannel()
+            .sendMessage(new MessageBuilder().setEmbed(embedBuilder.build()).build()));
       }
     }
   }
@@ -105,7 +122,7 @@ public class CommandHandler extends ListenerAdapter {
   }
 
   private void executeCommand(Long requestMessageId, User user, JShellWrapper shell, String command,
-                              MessageChannel channel) {
+      MessageChannel channel) {
     List<JShellResult> evalResults = shell.eval(command);
 
     List<JShellResult> toDisplay = evalResults.subList(
@@ -118,7 +135,8 @@ public class CommandHandler extends ListenerAdapter {
     }
   }
 
-  private void handleResult(Long requestMessageId, User user, JShellWrapper.JShellResult result, JShellWrapper shell,
+  private void handleResult(Long requestMessageId, User user, JShellWrapper.JShellResult result,
+      JShellWrapper shell,
       MessageChannel channel) {
     MessageBuilder messageBuilder = new MessageBuilder();
     EmbedBuilder embedBuilder;
@@ -159,6 +177,8 @@ public class CommandHandler extends ListenerAdapter {
   private void send(Long requestMessageId, RestAction<Message> action) {
     action.submit().thenAccept(message -> {
       answeredMessages.put(requestMessageId, message);
+      housekeeper.schedule(() -> answeredMessages.remove(requestMessageId), editLimit.toMillis(),
+          TimeUnit.MILLISECONDS);
       if (autoDeleteMessages) {
         message.delete().delay(autoDeleteMessageDuration).queue();
       }
